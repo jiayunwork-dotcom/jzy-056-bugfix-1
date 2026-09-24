@@ -135,7 +135,7 @@ func makeRay(pts []geom.Point, k edgeKey, id, w int) Ray {
 	// ...and side of a probe one normal-length past the edge midpoint.
 	probe := geom.Point{X: mid.X + nx, Y: mid.Y + ny}
 	sideProbe := (v.X-u.X)*(probe.Y-u.Y) - (v.Y-u.Y)*(probe.X-u.X)
-	if sideThird*sideProbe < 0 {
+	if sideThird*sideProbe > 0 {
 		nx, ny = -nx, -ny // probe is on the interior side: flip outward
 	}
 	return Ray{A: id, DX: nx, DY: ny, DelaunayUV: [2]int{k.u, k.v}}

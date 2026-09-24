@@ -116,6 +116,99 @@ func TestDualTopology(t *testing.T) {
 	}
 }
 
+// asymmetricPts is a fixed, deliberately lopsided point set: hull edges of
+// very uneven length and a centroid pulled well off-centre. On regular,
+// symmetric inputs (square, regular polygon) an inward-pointing hull ray is
+// easy to miss by eye; this set makes the outward/inward distinction
+// unambiguous.
+func asymmetricPts() []geom.Point {
+	return []geom.Point{
+		{X: 0.0, Y: 0.0},
+		{X: 3.7, Y: 0.4},
+		{X: 9.2, Y: 0.1}, // long stretched bottom edge
+		{X: 11.8, Y: 2.6},
+		{X: 10.4, Y: 6.3}, // far right outlier
+		{X: 6.1, Y: 4.9},
+		{X: 2.2, Y: 5.6},
+		{X: 0.6, Y: 2.9},
+		{X: 4.4, Y: 2.2}, // interior
+		{X: 7.3, Y: 2.8}, // interior
+		{X: 5.2, Y: 3.6}, // interior
+	}
+}
+
+// Every unbounded ray dual to a convex-hull Delaunay edge must point AWAY
+// from the point set: walking along it moves further from the cloud, never
+// back through it. The outward side of a hull edge is the side opposite the
+// adjacent triangle's third vertex.
+func TestHullRaysPointOutward(t *testing.T) {
+	pts, err := geom.ParsePoints(asymmetricPts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tris, err := triangulate.Triangulate(pts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Build(pts, tris)
+
+	// One ray per hull edge; the hull corner count equals its edge count.
+	if want := len(geom.ConvexHull(pts)); len(d.Rays) != want {
+		t.Fatalf("got %d rays, want %d (one per hull edge)", len(d.Rays), want)
+	}
+
+	// The centroid is a strictly positive convex combination of the points,
+	// so it lies strictly inside the hull; centroid -> edge midpoint is a
+	// reliable outward reference direction for every hull edge.
+	var cx, cy float64
+	for _, p := range pts {
+		cx += p.X
+		cy += p.Y
+	}
+	cx /= float64(len(pts))
+	cy /= float64(len(pts))
+
+	for _, ry := range d.Rays {
+		u := pts[ry.DelaunayUV[0]]
+		v := pts[ry.DelaunayUV[1]]
+		ex, ey := v.X-u.X, v.Y-u.Y
+		lenE := math.Hypot(ex, ey)
+		midX, midY := (u.X+v.X)/2, (u.Y+v.Y)/2
+
+		if n := math.Hypot(ry.DX, ry.DY); math.Abs(n-1) > 1e-12 {
+			t.Errorf("ray %v is not unit length (got %.12f)", ry, n)
+		}
+		// The dual of a Delaunay edge is perpendicular to it.
+		if dot := ex*ry.DX + ey*ry.DY; math.Abs(dot) > 1e-9*lenE {
+			t.Errorf("ray %v is not perpendicular to its hull edge (dot %.2e)", ry, dot)
+		}
+
+		// Acceptance check: same sign as the centroid-outward reference.
+		if dot := (midX-cx)*ry.DX + (midY-cy)*ry.DY; dot <= 0 {
+			t.Errorf("ray %v points inward: dot with centroid->midpoint reference = %v, want > 0",
+				ry, dot)
+		}
+
+		// Geometric definition: the ray must leave the edge on the side
+		// OPPOSITE the adjacent triangle's third vertex.
+		w := -1
+		for _, idx := range d.Vertices[ry.A].Triangle {
+			if idx != ry.DelaunayUV[0] && idx != ry.DelaunayUV[1] {
+				w = idx
+			}
+		}
+		if w < 0 {
+			t.Fatalf("ray %v: source triangle has no third vertex off the hull edge", ry)
+		}
+		sideThird := ex*(pts[w].Y-u.Y) - ey*(pts[w].X-u.X)
+		sideRay := ex*ry.DY - ey*ry.DX
+		if sideThird*sideRay > 0 {
+			t.Errorf("ray %v exits toward the same side as the triangle's third vertex %d (inward)",
+				ry, w)
+		}
+	}
+}
+
 func TestTranslationMovesVertices(t *testing.T) {
 	base, err := geom.ParsePoints(randomPts(30, 13))
 	if err != nil {
