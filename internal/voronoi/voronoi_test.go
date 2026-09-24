@@ -116,6 +116,68 @@ func TestDualTopology(t *testing.T) {
 	}
 }
 
+// TestHullRaysPointOutward pins the orientation of the unbounded Voronoi
+// rays dual to convex-hull Delaunay edges: every ray must leave the point
+// cloud, not dive back into it. The point set is deliberately asymmetric
+// (uneven hull edge lengths, centroid off to one side) so that inward and
+// outward directions are geometrically distinct — a regular, symmetric
+// input can hide a flipped ray.
+func TestHullRaysPointOutward(t *testing.T) {
+	raw := []geom.Point{
+		{X: 0, Y: 0}, {X: 4.2, Y: 0.3}, {X: 8.7, Y: 0}, // long bottom chain
+		{X: 10.5, Y: 2.2}, {X: 9.3, Y: 5.1},
+		{X: 3.1, Y: 6.4}, {X: -1.2, Y: 4.3}, {X: -1.6, Y: 1.4},
+		{X: 4.5, Y: 2.1}, {X: 5.6, Y: 3.8}, {X: 2.4, Y: 3.2}, {X: 7.1, Y: 1.6}, // interior
+	}
+	pts, err := geom.ParsePoints(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tris, err := triangulate.Triangulate(pts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Build(pts, tris)
+	if len(d.Rays) == 0 {
+		t.Fatal("no hull rays emitted")
+	}
+
+	// Centroid of the point set: strictly inside the convex hull, so the
+	// vector from it to a hull-edge midpoint is a valid outward reference.
+	var c geom.Point
+	for _, p := range pts {
+		c = c.Add(p)
+	}
+	c = c.Mul(1 / float64(len(pts)))
+
+	for _, ry := range d.Rays {
+		u, v := pts[ry.DelaunayUV[0]], pts[ry.DelaunayUV[1]]
+		mid := geom.Point{X: (u.X + v.X) / 2, Y: (u.Y + v.Y) / 2}
+		dir := geom.Point{X: ry.DX, Y: ry.DY}
+
+		if n := math.Hypot(dir.X, dir.Y); math.Abs(n-1) > 1e-12 {
+			t.Errorf("ray %v is not unit length (got %.12f)", ry, n)
+		}
+
+		// Outward means agreeing with the centroid->midpoint reference.
+		ref := mid.Sub(c)
+		if dot := dir.X*ref.X + dir.Y*ref.Y; dot <= 0 {
+			t.Errorf("ray %v points inward: dot with outward reference = %.6g", ry, dot)
+		}
+
+		// Outward also means backing away from the adjacent triangle's
+		// third vertex (the defining criterion for the dual ray).
+		w, ok := thirdVertex(tris[ry.A], ry.DelaunayUV[0], ry.DelaunayUV[1])
+		if !ok {
+			t.Fatalf("ray %v: DelaunayUV is not an edge of its triangle", ry)
+		}
+		inward := pts[w].Sub(mid)
+		if dot := dir.X*inward.X + dir.Y*inward.Y; dot >= 0 {
+			t.Errorf("ray %v leans toward the adjacent triangle's third vertex: dot = %.6g", ry, dot)
+		}
+	}
+}
+
 func TestTranslationMovesVertices(t *testing.T) {
 	base, err := geom.ParsePoints(randomPts(30, 13))
 	if err != nil {
